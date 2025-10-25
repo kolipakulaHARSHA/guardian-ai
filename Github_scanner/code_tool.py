@@ -370,7 +370,7 @@ class ComplianceChecker:
     Uses semantic search and LLM to check compliance against guidelines.
     """
     
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = "gemini-2.5-pro-preview-03-25"):
         """
         Initialize the Compliance Checker.
         
@@ -776,8 +776,8 @@ Examples:
     )
     compliance_parser.add_argument(
         '--model',
-        default='gemini-2.5-flash',
-        help='Gemini model to use (default: gemini-2.5-flash)'
+        default='gemini-2.5-pro-preview-03-25',
+        help='Gemini model to use (default: gemini-2.5-pro-preview-03-25)'
     )
     compliance_parser.add_argument(
         '--max-display',
@@ -983,25 +983,11 @@ Examples:
         violations = []
         for check in compliance_checks:
             # Determine if this is a violation (non-compliance)
-            assessment = check['assessment'].strip()
-            assessment_lower = assessment.lower()
-            
-            # Check if assessment starts with positive indicators (NOT a violation)
-            starts_positive = any(assessment_lower.startswith(positive) for positive in [
-                'yes', 'the project has', 'the repository has', 'the code has',
-                'present', 'implemented', 'exists', 'found', 'complies', 'compliant',
-                'the project does have', 'the repository does have'
+            assessment_lower = check['assessment'].lower()
+            is_violation = any(keyword in assessment_lower for keyword in [
+                'no', 'not', 'does not', 'missing', 'absent', 'lacking', 
+                'cannot find', 'no information', 'no evidence', 'not found'
             ])
-            
-            # Check if assessment starts with or clearly indicates negative (IS a violation)
-            starts_negative = any(assessment_lower.startswith(negative) for negative in [
-                'no', 'not found', 'missing', 'absent', 'lacking', 'does not',
-                'cannot find', 'no information', 'no evidence', 'the project does not',
-                'the repository does not', 'there is no', 'based on', 'based only'
-            ])
-            
-            # A violation is when it's clearly negative AND not clearly positive
-            is_violation = starts_negative and not starts_positive
             
             if is_violation:
                 # Use evidence details if available (includes line numbers and code)

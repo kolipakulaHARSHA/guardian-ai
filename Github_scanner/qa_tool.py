@@ -28,7 +28,7 @@ class RepoQATool:
     Uses RAG (Retrieval Augmented Generation) to answer questions about code.
     """
     
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = "gemini-2.5-pro-preview-03-25"):
         """
         Initialize the Q&A tool.
         
@@ -314,8 +314,8 @@ Examples:
     
     parser.add_argument(
         '--model',
-        default='gemini-2.5-flash',
-        help='Gemini model to use (default: gemini-2.5-flash)'
+        default='gemini-2.5-pro-preview-03-25',
+        help='Gemini model to use (default: gemini-2.5-pro-preview-03-25)'
     )
     
     parser.add_argument(
