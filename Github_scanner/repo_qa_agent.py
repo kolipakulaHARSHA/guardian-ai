@@ -47,8 +47,23 @@ class RepoQAAgent:
         if google_api_key:
             os.environ["GOOGLE_API_KEY"] = google_api_key
         
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        self.llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
+        # Verify API key is set
+        if not os.environ.get("GOOGLE_API_KEY"):
+            raise ValueError(
+                "GOOGLE_API_KEY not found. Please set it as an environment variable or pass it to the constructor."
+            )
+        
+        # Initialize embeddings and LLM with API key
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=api_key
+        )
+        self.llm = ChatGoogleGenerativeAI(
+            model=model_name, 
+            temperature=temperature,
+            google_api_key=api_key
+        )
         self.documents: List[Document] = []
     
     def clone_and_index_repository(

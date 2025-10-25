@@ -6,9 +6,25 @@ An intelligent AI-powered tool that scans GitHub repositories and checks them fo
 
 - **Repository Scanner** - Clone and analyze GitHub repositories
 - **AI-Powered Q&A** - Ask natural language questions about any repository
-- **Compliance Checking** - Automatically verify repos against custom guidelines
+- **Compliance Checking (RAG Mode)** - Fast semantic search for compliance verification
+- **Code Audit (Line-by-Line Mode)** - Exhaustive scanning for critical compliance
 - **Intelligent Analysis** - Uses RAG (Retrieval Augmented Generation) for accurate results
 - **Vector Search** - FAISS-powered semantic search through codebases
+- **Dual Modes** - Choose between speed (RAG) and thoroughness (line-by-line)
+
+## 🎯 Two Powerful Modes
+
+### ⚡ RAG Mode (Fast & Smart)
+- Semantic search through codebase
+- Instant answers to questions
+- Cost-effective ($0.01 per scan)
+- Perfect for large repositories
+
+### 🔍 Audit Mode (Thorough & Precise)
+- Line-by-line code analysis
+- Exact violation locations
+- 100% code coverage
+- Ideal for critical compliance
 
 ## 🚀 Quick Start
 
@@ -44,19 +60,38 @@ copy .env.example .env
 python cli.py scan https://github.com/username/repo
 ```
 
-#### 2. Ask Questions
+#### 2. Ask Questions (RAG Mode)
 ```bash
 python cli.py ask https://github.com/username/repo -q "What does this project do?"
 ```
 
-#### 3. Check Compliance
+#### 3. Check Compliance (RAG Mode - Fast)
 ```bash
 python cli.py compliance https://github.com/username/repo -g "Must have README" "Must have tests"
 ```
 
+#### 4. Code Audit (Line-by-Line Mode - Thorough)
+```bash
+python cli.py audit https://github.com/username/repo --brief "All functions must have docstrings"
+```
+
+## 🔀 Choosing the Right Mode
+
+| Use Case | Recommended Mode | Command |
+|----------|-----------------|---------|
+| Quick exploration | RAG | `compliance` |
+| Large repositories | RAG | `ask` or `compliance` |
+| Critical compliance | Line-by-line | `audit` |
+| Security audit | Line-by-line | `audit` |
+| Need exact line numbers | Line-by-line | `audit` |
+| Interactive Q&A | RAG | `ask` |
+
 ## 📚 Documentation
 
 - [Quick Start Guide](Github_scanner/QUICKSTART.md)
+- [Audit Mode Guide](Github_scanner/AUDIT_MODE_GUIDE.md) - Person C Implementation
+- [Architectural Analysis](ARCHITECTURAL_ANALYSIS.md) - RAG vs Line-by-Line comparison
+- [Implementation Summary](PERSON_C_IMPLEMENTATION_SUMMARY.md)
 - [Gemini Setup](Github_scanner/GEMINI_READY.md)
 - [Quick Reference](Github_scanner/QUICK_REFERENCE.md)
 - [Project Summary](Github_scanner/PROJECT_SUMMARY.md)
