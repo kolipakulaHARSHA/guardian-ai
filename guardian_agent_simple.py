@@ -142,10 +142,11 @@ In this case, set repo_url to: {self.qa_repo_url}
 
 Available tools:
 1. Legal_Analyzer: Analyzes PDF regulatory documents to extract compliance requirements
-2. Code_Auditor: Scans code repositories for violations
-   - AUDIT mode (default): Exhaustive line-by-line scanning to find specific violations
-   - COMPLIANCE mode: RAG-based semantic search to check overall compliance with guidelines
-3. QA_Tool: Answers questions about code repositories using RAG
+2. Code_Auditor: Scans code repositories for violations. It has three modes:
+   - AUDIT: Exhaustive line-by-line scan. High precision, but slow and expensive. Use for finding specific, known violations.
+   - COMPLIANCE: Fast, RAG-based semantic search. Good for a quick overview but may miss details.
+   - HYBRID: Recommended for most compliance checks. Uses RAG to find relevant files, then runs a line-by-line audit on just those files. This is the best balance of speed and accuracy.
+3. QA_Tool: Answers questions about code repositories using RAG.
 {qa_context}
 User Query: "{query}"
 
@@ -153,16 +154,16 @@ Determine:
 1. Which tools are needed?
 2. In what order should they be used?
 3. What information should be passed between tools?
-4. For Code_Auditor: Should it use "audit" mode (find violations) or "compliance" mode (check guidelines)?
+4. For Code_Auditor: Which mode should it use? Default to "hybrid" for compliance-related queries. Use "audit" only when the user explicitly asks for a full, exhaustive scan.
 
 Respond ONLY with a JSON object like this:
 {{
     "tools_needed": ["Legal_Analyzer", "Code_Auditor"],
     "execution_order": ["Legal_Analyzer", "Code_Auditor"],
-    "reasoning": "Need to first understand regulations, then audit code for violations",
+    "reasoning": "Need to first understand regulations, then audit code for violations using the most balanced approach.",
     "pdf_path": "path/to/pdf" (if Legal_Analyzer is needed, extract from query),
     "repo_url": "https://github.com/..." (if Code_Auditor or QA_Tool is needed, extract from query OR use active session repo),
-    "audit_mode": "audit" (use "audit" for finding violations, "compliance" for checking guidelines),
+    "audit_mode": "hybrid" (use "hybrid" for compliance, "audit" for exhaustive scans, "compliance" for quick checks),
     "question": "specific question" (if QA_Tool is needed)
 }}
 
@@ -243,7 +244,7 @@ JSON:"""
                 
             elif tool_name == "Code_Auditor":
                 brief = results.get("legal_brief", "Check for code quality and security issues")
-                mode = plan.get("audit_mode", "audit")  # "audit" or "compliance"
+                mode = plan.get("audit_mode", "audit")  # "audit", "compliance", or "hybrid"
                 result = self._run_code_auditor(plan.get("repo_url"), brief, mode)
                 # Store both summary and detailed data
                 if isinstance(result, dict):
@@ -294,12 +295,12 @@ JSON:"""
     
     def _run_code_auditor(self, repo_url: str, brief: str, mode: str = "audit"):
         """
-        Run code auditor tool in either AUDIT or COMPLIANCE mode
+        Run code auditor tool in AUDIT, COMPLIANCE or HYBRID mode
         
         Args:
             repo_url: GitHub repository URL
             brief: Technical brief or compliance guidelines
-            mode: "audit" (exhaustive line-by-line) or "compliance" (RAG-based semantic)
+            mode: "audit" (exhaustive), "compliance" (RAG), or "hybrid" (RAG -> audit)
             
         Returns:
             dict with 'summary' (string) and 'details' (raw data)
@@ -308,6 +309,9 @@ JSON:"""
             return {"summary": "Error: No repository URL provided", "details": {}}
         
         try:
+            if mode == "hybrid":
+                return self._run_hybrid_audit(repo_url, brief)
+
             if mode == "compliance":
                 # COMPLIANCE MODE - RAG-based semantic checking
                 from Github_scanner.code_tool import ComplianceChecker
@@ -375,6 +379,165 @@ JSON:"""
                 "summary": f"Error in code {mode}: {str(e)}",
                 "details": {"error": str(e), "mode": mode}
             }
+
+    def _run_hybrid_audit(self, repo_url: str, brief: str) -> Dict[str, Any]:
+        """
+        Run an intelligent hybrid audit:
+        1.  Use an LLM to translate abstract guidelines into concrete, searchable code patterns.
+        2.  Use targeted RAG searches to find files matching each pattern.
+        3.  Run a precise, line-by-line audit on the aggregated set of relevant files.
+        """
+        self._log("--- Running Intelligent Hybrid Audit ---")
+
+        # Step 1: Generate searchable code patterns from the compliance brief
+        self._log("Step 1: Translating guidelines into searchable code patterns...")
+        try:
+            pattern_generation_prompt = f"""
+You are a senior software architect specializing in code compliance. Analyze the following compliance guidelines and for each one, generate a list of concrete, problematic code patterns that would indicate a potential violation. These patterns should be searchable within a codebase.
+
+Guidelines:
+---
+{brief}
+---
+
+Respond ONLY with a JSON object where each key is a summary of the guideline and the value is a list of searchable code pattern descriptions.
+
+Example format:
+{{
+  "Configurable UI/Data": [
+    "Hardcoded string literals inside JSX tags (e.g., <div>Hello</div>, <button>Submit</button>)",
+    "Hardcoded strings in 'placeholder', 'alt', or 'title' attributes",
+    "File paths or URLs as static strings in the code"
+  ],
+  "Configurable Business Rules": [
+    "Use of 'magic numbers' or hardcoded numerical constants in business logic (e.g., if (price > 100.00))",
+    "Hardcoded API endpoint URLs in fetch, axios, or other HTTP client calls"
+  ],
+  "Stateless Design": [
+    "Imports of client-side state management libraries like 'jotai', 'redux', 'zustand'",
+    "Use of 'useState' or 'useReducer' hooks in React components"
+  ]
+}}
+"""
+            response = self.llm.invoke([HumanMessage(content=pattern_generation_prompt)])
+            response_content = response.content.strip()
+            self._log(f"DEBUG: Raw pattern generation response: '{response_content}'")
+
+            if not response_content:
+                raise ValueError("LLM returned an empty response for pattern generation.")
+
+            # Clean the response to ensure it's valid JSON
+            if '```json' in response_content:
+                response_content = response_content.split('```json')[1].split('```')[0].strip()
+            elif response_content.startswith('```') and response_content.endswith('```'):
+                response_content = response_content[3:-3].strip()
+
+            guideline_patterns = json.loads(response_content)
+            self._log(f"✓ Generated {len(guideline_patterns)} pattern categories.")
+        except Exception as e:
+            self._log(f"⚠️  Could not generate code patterns: {e}. Falling back to simple audit.")
+            # Fallback to a full audit if pattern generation fails
+            return self._run_code_auditor(repo_url, brief, mode="audit")
+
+        # Step 2: Find relevant files for each pattern using targeted RAG searches
+        self._log("\nStep 2: Discovering relevant files with targeted RAG searches...")
+        relevant_files = set()
+        from Github_scanner.code_tool import ComplianceChecker
+        # Use a fast and cheap model for this discovery phase
+        checker = ComplianceChecker(model_name="gemini-2.5-flash")
+        try:
+            # Clone and index the repo once
+            clone_result = checker._clone_and_index(repo_url)
+            if clone_result['status'] == 'error':
+                self._log(f"⚠️  Failed to clone or index repository: {clone_result['error']}")
+                return self._run_code_auditor(repo_url, brief, mode="audit") # Fallback
+
+            for guideline, patterns in guideline_patterns.items():
+                self._log(f"  - Searching for patterns related to: '{guideline}'")
+                # Check all patterns for the current guideline in one go
+                compliance_result = checker.check_patterns(patterns)
+                
+                # Aggregate file paths from the evidence sources
+                for check in compliance_result.get('compliance_checks', []):
+                    for source in check.get('evidence_sources', []):
+                        if isinstance(source, str):
+                            relevant_files.add(source)
+        finally:
+            checker.cleanup()
+        
+        if not relevant_files:
+            return {
+                "summary": "Intelligent Hybrid Audit Complete: No files matching the generated code patterns were found. The codebase appears to be compliant based on this initial scan.",
+                "details": {
+                    "mode": "hybrid_intelligent",
+                    "repository": repo_url,
+                    "stage_1_patterns": guideline_patterns,
+                    "stage_2_results": "Not run, no relevant files found."
+                }
+            }
+
+        self._log(f"\n✓ Discovery complete. Found {len(relevant_files)} potentially relevant files.")
+        self._log(f"Files to be audited in detail: {', '.join(list(relevant_files)[:5])}...")
+
+        # Step 3: Run a deep, line-by-line audit on the aggregated files
+        self._log("\nStep 3: Running precise line-by-line audit on relevant files...")
+        CodeAuditor = get_code_tool()
+        auditor = CodeAuditor(model_name="gemini-2.5-flash")
+        
+        import tempfile
+        import shutil
+        import git
+        from pathlib import Path
+
+        temp_dir = tempfile.mkdtemp(prefix='guardian_hybrid_')
+        try:
+            self._log(f"Cloning repository for deep scan: {repo_url}")
+            git.Repo.clone_from(repo_url, temp_dir)
+            repo_path = Path(temp_dir)
+            
+            files_to_scan_abs = [str(repo_path / file) for file in relevant_files if (repo_path / file).exists()]
+
+            if not files_to_scan_abs:
+                self._log("Warning: All relevant files found in RAG search did not exist in the cloned repo.")
+                return {
+                    "summary": "Intelligent Hybrid Audit Warning: The files identified in the initial scan could not be found in the repository clone. The audit could not be completed.",
+                    "details": {"mode": "hybrid_intelligent", "files_to_scan": list(relevant_files)}
+                }
+
+            audit_result = auditor.scan_files(files_to_scan_abs, brief)
+            
+            # Step 4: Synthesize and return the final results
+            violations = audit_result.get('violations', [])
+            summary = f"Intelligent Hybrid Audit Results:\n"
+            summary += f"- Repository: {repo_url}\n"
+            summary += f"- Initial pattern-based scan identified {len(relevant_files)} potentially relevant files.\n"
+            summary += f"- Detailed line-by-line scan of these files found {len(violations)} violations.\n\n"
+
+            if violations:
+                summary += "Top violations found:\n"
+                for i, v in enumerate(violations[:10], 1):
+                    # Ensure file path is relative for cleaner output
+                    relative_path = v.get('file', '').replace(str(repo_path), '')
+                    summary += f"{i}. {relative_path} (line {v.get('line')})\n"
+                    summary += f"   {v.get('explanation')}\n\n"
+            else:
+                summary += "✅ No violations found in the detailed scan of the relevant files!\n"
+
+            return {
+                "summary": summary,
+                "details": {
+                    "mode": "hybrid_intelligent",
+                    "repository": repo_url,
+                    "total_violations": len(violations),
+                    "violations": violations,
+                    "files_scanned_in_detail": list(relevant_files),
+                    "scan_statistics": audit_result.get('statistics', {})
+                }
+            }
+
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, onerror=lambda func, path, exc: (os.chmod(path, 0o777), func(path)))
     
     def _run_qa_tool(self, repo_url: str, question: str) -> str:
         """Run QA tool - uses existing session if available for the same repo"""
@@ -702,43 +865,46 @@ Examples:
     elif args.query:
         result = agent.run(args.query)
         
-        # Save to JSON file if requested
-        if args.output:
-            import json
-            from datetime import datetime
+        # Default behavior: Save results to a generated JSON file
+        import json
+        from datetime import datetime
+        import re
+
+        # Generate a filename based on repo and timestamp
+        output_filename = args.output  # Use custom filename if provided
+        if not output_filename:
+            repo_url = result.get('plan', {}).get('repo_url')
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            repo_name = "guardian_report" # Default
+
+            if repo_url:
+                match = re.search(r'github\.com/[\w-]+/([\w.-]+)', repo_url)
+                if match:
+                    repo_name = match.group(1).replace('.git', '')
             
-            # Prepare JSON output
-            json_output = {
-                'timestamp': datetime.now().isoformat(),
-                'query': args.query,
-                'model': args.model,
-                'plan': result.get('plan', {}),
-                'tool_results': result.get('tool_results', {}),
-                'final_answer': result.get('output', ''),
-                'metadata': {
-                    'guardian_version': '1.0',
-                    'mode': 'agent_orchestration'
-                }
+            output_filename = f"{repo_name}_{timestamp}.json"
+
+        # Prepare JSON output
+        json_output = {
+            'timestamp': datetime.now().isoformat(),
+            'query': args.query,
+            'model': args.model,
+            'plan': result.get('plan', {}),
+            'tool_results': result.get('tool_results', {}),
+            'final_answer': result.get('output', ''),
+            'metadata': {
+                'guardian_version': '1.0',
+                'mode': 'agent_orchestration'
             }
-            
-            with open(args.output, 'w', encoding='utf-8') as f:
-                json.dump(json_output, f, indent=2, ensure_ascii=False)
-            
-            print(f"\n✅ Results saved to: {args.output}")
+        }
+        
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            json.dump(json_output, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n✅ Results saved to: {output_filename}")
         
         # Output as JSON to console if requested
         if args.json:
-            import json
-            from datetime import datetime
-            
-            json_output = {
-                'timestamp': datetime.now().isoformat(),
-                'query': args.query,
-                'model': args.model,
-                'plan': result.get('plan', {}),
-                'tool_results': result.get('tool_results', {}),
-                'final_answer': result.get('output', ''),
-            }
             print(json.dumps(json_output, indent=2, ensure_ascii=False))
         else:
             # Regular console output

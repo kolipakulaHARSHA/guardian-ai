@@ -252,6 +252,69 @@ Your response must be ONLY the JSON list, nothing else.
             print(f"Error reading file {file_path}: {e}")
             return 0
     
+    def scan_files(self, file_paths: List[str], technical_brief: str, repo_root: Optional[Path] = None) -> Dict[str, Any]:
+        """
+        Scan a specific list of files for compliance violations.
+        
+        Args:
+            file_paths: List of absolute paths to files to scan.
+            technical_brief: Plain-English compliance rules.
+            repo_root: The root of the repository for determining relative paths. If None, it's inferred.
+            
+        Returns:
+            Dictionary with scan results.
+        """
+        if not file_paths:
+            return {
+                'status': 'success',
+                'total_files': 0,
+                'analyzed_files': 0,
+                'total_violations': 0,
+                'violations': []
+            }
+
+        # Infer repo_root from the common path of the files if not provided
+        if not repo_root:
+            common_path = os.path.commonpath(file_paths)
+            # Check if common_path is a directory, if not, get its parent
+            if os.path.isfile(common_path):
+                repo_root = Path(os.path.dirname(common_path))
+            else:
+                repo_root = Path(common_path)
+
+        self.violations = []
+        analyzed_files = 0
+        
+        print("\nScanning specific files...")
+        for file_str_path in file_paths:
+            file_path = Path(file_str_path)
+            if file_path.is_file() and self._should_analyze_file(file_path):
+                analyzed_files += 1
+                print(f"Analyzing: {file_path.relative_to(repo_root)}")
+                
+                violations_in_file = self._analyze_file(
+                    file_path, 
+                    repo_root, 
+                    technical_brief
+                )
+                
+                if violations_in_file > 0:
+                    print(f"  ⚠ Found {violations_in_file} violation(s)")
+
+        result = {
+            'status': 'success',
+            'total_files': len(file_paths),
+            'analyzed_files': analyzed_files,
+            'total_violations': len(self.violations),
+            'violations': self.violations
+        }
+        
+        print(f"\n✓ Scan complete:")
+        print(f"  - Analyzed files: {analyzed_files}")
+        print(f"  - Violations found: {len(self.violations)}")
+        
+        return result
+
     def scan_repository(self, repo_url: str, technical_brief: str) -> Dict[str, Any]:
         """
         Scan a GitHub repository for compliance violations.
@@ -279,44 +342,11 @@ Your response must be ONLY the JSON list, nothing else.
             
             # Step 2: Iterate through all files
             repo_path = Path(temp_dir)
-            total_files = 0
-            analyzed_files = 0
+            all_files = [str(p) for p in repo_path.rglob('*') if p.is_file()]
             
-            print("\nScanning files...")
-            for file_path in repo_path.rglob('*'):
-                if file_path.is_file():
-                    total_files += 1
-                    
-                    if self._should_analyze_file(file_path):
-                        analyzed_files += 1
-                        print(f"Analyzing: {file_path.relative_to(repo_path)}")
-                        
-                        violations_in_file = self._analyze_file(
-                            file_path, 
-                            repo_path, 
-                            technical_brief
-                        )
-                        
-                        if violations_in_file > 0:
-                            print(f"  ⚠ Found {violations_in_file} violation(s)")
+            # Use the new scan_files method
+            return self.scan_files(all_files, technical_brief, repo_root=repo_path)
             
-            # Compile results
-            result = {
-                'status': 'success',
-                'repository': repo_url,
-                'total_files': total_files,
-                'analyzed_files': analyzed_files,
-                'total_violations': len(self.violations),
-                'violations': self.violations
-            }
-            
-            print(f"\n✓ Scan complete:")
-            print(f"  - Total files: {total_files}")
-            print(f"  - Analyzed files: {analyzed_files}")
-            print(f"  - Violations found: {len(self.violations)}")
-            
-            return result
-        
         except Exception as e:
             return {
                 'status': 'error',
@@ -394,6 +424,52 @@ class ComplianceChecker:
             google_api_key=api_key
         )
         
+        self.vectorstore = None
+        self.retriever = None
+        self.qa_chain = None
+        self.documents = []
+        self.repo_path = None
+        self.temp_dir = None
+
+    def _clone_and_index(self, repo_url: str) -> Dict[str, Any]:
+        """Clones and indexes a repository. This is called once per session."""
+        if self.repo_path:
+            return {'status': 'success', 'message': 'Repository already indexed.'}
+
+        try:
+            self.temp_dir = tempfile.mkdtemp(prefix='guardian_compliance_')
+            print(f"Cloning repository to {self.temp_dir}...")
+            git.Repo.clone_from(repo_url, self.temp_dir)
+            print(f"✓ Repository cloned successfully\n")
+            self.repo_path = Path(self.temp_dir)
+            
+            index_result = self.index_repository(self.repo_path)
+            
+            if index_result['status'] != 'success':
+                return {
+                    'status': 'error',
+                    'error': f"Indexing failed: {index_result.get('message', 'Unknown error')}"
+                }
+            
+            print(f"✓ Indexed {index_result['documents_count']} documents "
+                  f"({index_result['chunks_count']} chunks)\n")
+            return {'status': 'success'}
+
+        except Exception as e:
+            self.cleanup() # Clean up on failure
+            return {'status': 'error', 'error': str(e)}
+
+    def cleanup(self):
+        """Cleans up the temporary directory."""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            print(f"\nCleaning up temporary directory...")
+            try:
+                shutil.rmtree(self.temp_dir, onerror=self._handle_remove_readonly)
+                print("✓ Cleanup complete")
+            except Exception as e:
+                print(f"Warning: Cleanup failed: {e}")
+        self.repo_path = None
+        self.temp_dir = None
         self.vectorstore = None
         self.retriever = None
         self.qa_chain = None
@@ -502,6 +578,59 @@ Provide a detailed answer with specific examples from the code."""
         
         return True
     
+    def check_patterns(self, patterns: List[str]) -> Dict[str, Any]:
+        """
+        Checks a list of patterns against the already-indexed repository.
+        """
+        if not self.repo_path or not self.qa_chain:
+            return {
+                'status': 'error',
+                'error': 'Repository not indexed. Call _clone_and_index first.',
+                'compliance_checks': []
+            }
+
+        compliance_results = []
+        print("Running compliance checks on indexed repo...")
+        for i, pattern in enumerate(patterns, 1):
+            print(f"  [{i}/{len(patterns)}] Checking: {pattern[:60]}...")
+            
+            try:
+                docs = self.retriever.invoke(pattern)
+                answer = self.qa_chain.invoke(pattern)
+                
+                evidence_details = []
+                for doc in docs[:3]:
+                    source_file = doc.metadata.get('source', 'unknown')
+                    content = doc.page_content.strip()
+                    code_snippet = content[:150] + "..." if len(content) > 150 else content
+                    line_number = self._estimate_line_number(self.repo_path, source_file, content)
+                    
+                    evidence_details.append({
+                        'file': source_file,
+                        'line': line_number,
+                        'code_snippet': code_snippet
+                    })
+                
+                compliance_results.append({
+                    'guideline': pattern, # The "guideline" is the pattern
+                    'assessment': answer,
+                    'evidence_sources': [doc.metadata.get('source', 'unknown') for doc in docs[:3]],
+                    'evidence_details': evidence_details
+                })
+            except Exception as e:
+                compliance_results.append({
+                    'guideline': pattern,
+                    'assessment': f'Error checking compliance: {str(e)}',
+                    'evidence_sources': [],
+                    'evidence_details': []
+                })
+        
+        return {
+            'status': 'success',
+            'compliance_checks': compliance_results,
+            'total_guidelines_checked': len(patterns)
+        }
+
     def check_compliance(
         self,
         repo_url: str,
@@ -520,81 +649,13 @@ Provide a detailed answer with specific examples from the code."""
         temp_dir = None
         
         try:
-            # Clone repository
-            temp_dir = tempfile.mkdtemp(prefix='guardian_compliance_')
-            print(f"Cloning repository to {temp_dir}...")
-            
-            git.Repo.clone_from(repo_url, temp_dir)
-            print(f"✓ Repository cloned successfully\n")
-            
-            # Index repository
-            repo_path = Path(temp_dir)
-            index_result = self.index_repository(repo_path)
-            
-            if index_result['status'] == 'warning':
-                return {
-                    'status': 'error',
-                    'error': 'No documents found to index',
-                    'compliance_checks': []
-                }
-            
-            print(f"✓ Indexed {index_result['documents_count']} documents "
-                  f"({index_result['chunks_count']} chunks)\n")
-            
-            # Check each guideline
-            compliance_results = []
-            
-            print("Running compliance checks...")
-            for i, guideline in enumerate(guidelines, 1):
-                print(f"  [{i}/{len(guidelines)}] Checking: {guideline[:60]}...")
-                
-                question = f"Does this repository comply with the following requirement: {guideline}? Please provide specific evidence from the code or documentation."
-                
-                try:
-                    # Get relevant documents
-                    docs = self.retriever.invoke(guideline)
-                    
-                    # Get answer using QA chain
-                    answer = self.qa_chain.invoke(guideline)
-                    
-                    # Extract detailed source information with code snippets
-                    evidence_details = []
-                    for doc in docs[:3]:  # Top 3 most relevant
-                        source_file = doc.metadata.get('source', 'unknown')
-                        content = doc.page_content.strip()
-                        
-                        # Extract a relevant code snippet (first 150 chars)
-                        code_snippet = content[:150] + "..." if len(content) > 150 else content
-                        
-                        # Calculate line number by finding where this chunk appears in the original file
-                        line_number = self._estimate_line_number(repo_path, source_file, content)
-                        
-                        evidence_details.append({
-                            'file': source_file,
-                            'line': line_number,
-                            'code_snippet': code_snippet
-                        })
-                    
-                    compliance_results.append({
-                        'guideline': guideline,
-                        'assessment': answer,
-                        'evidence_sources': [doc.metadata.get('source', 'unknown') for doc in docs[:3]],
-                        'evidence_details': evidence_details  # New: detailed evidence with line numbers
-                    })
-                except Exception as e:
-                    compliance_results.append({
-                        'guideline': guideline,
-                        'assessment': f'Error checking compliance: {str(e)}',
-                        'evidence_sources': [],
-                        'evidence_details': []
-                    })
-            
-            return {
-                'status': 'success',
-                'repository': repo_url,
-                'compliance_checks': compliance_results,
-                'total_guidelines_checked': len(guidelines)
-            }
+            # This method now uses the single-clone-and-index pattern
+            clone_result = self._clone_and_index(repo_url)
+            if clone_result['status'] == 'error':
+                return clone_result
+
+            # Check each guideline using the indexed repo
+            return self.check_patterns(guidelines)
         
         except Exception as e:
             return {
@@ -605,14 +666,8 @@ Provide a detailed answer with specific examples from the code."""
             }
         
         finally:
-            # Cleanup
-            if temp_dir and os.path.exists(temp_dir):
-                print(f"\nCleaning up temporary directory...")
-                try:
-                    shutil.rmtree(temp_dir, onerror=self._handle_remove_readonly)
-                    print("✓ Cleanup complete")
-                except Exception as e:
-                    print(f"Warning: Cleanup failed: {e}")
+            # Cleanup is now handled by the caller of the class instance
+            pass
     
     @staticmethod
     def _handle_remove_readonly(func, path, exc):
@@ -698,7 +753,7 @@ if __name__ == "__main__":
         epilog="""
 Modes:
   audit       Line-by-line code auditing (exhaustive scanning)
-  compliance  RAG-based compliance checking (semantic search)
+  compliance  RAG-based compliance checking
 
 Examples:
   # AUDIT MODE - Find specific violations
