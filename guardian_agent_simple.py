@@ -382,15 +382,46 @@ JSON:"""
 
     def _run_hybrid_audit(self, repo_url: str, brief: str) -> Dict[str, Any]:
         """
-        Run an intelligent hybrid audit:
+        Run an enhanced intelligent hybrid audit:
+        0.  Determine relevant file types to prioritize from the brief.
         1.  Use an LLM to translate abstract guidelines into concrete, searchable code patterns.
-        2.  Use targeted RAG searches to find files matching each pattern.
+        2.  Use targeted RAG searches to find files matching each pattern, boosting prioritized file types.
         3.  Run a precise, line-by-line audit on the aggregated set of relevant files.
+        4.  Analyze the initial violations to generate new, more specific search patterns.
+        5.  Run a second RAG search with the refined patterns to find any remaining files.
+        6.  Perform a final deep scan on the newly discovered files and aggregate all results.
         """
-        self._log("--- Running Intelligent Hybrid Audit ---")
+        self._log("--- Running Enhanced Intelligent Hybrid Audit ---")
+
+        # Step 0: Determine relevant file types from the brief (Strategy 3)
+        self._log("\nStep 0: Determining relevant file types from brief...")
+        prioritized_extensions = []
+        try:
+            file_type_prompt = f"""
+Analyze the following compliance brief and list the file extensions that are most likely to contain relevant code.
+Focus on source code, configuration, and documentation files.
+
+Brief:
+---
+{brief}
+---
+
+Respond ONLY with a JSON array of strings.
+Example: [".js", ".jsx", ".py", ".json", ".html", ".css", ".sql"]
+"""
+            response = self.llm.invoke([HumanMessage(content=file_type_prompt)])
+            response_content = response.content.strip()
+            if '```json' in response_content:
+                response_content = response_content.split('```json')[1].split('```')[0].strip()
+            prioritized_extensions = json.loads(response_content)
+            self._log(f"✓ Prioritizing file types: {', '.join(prioritized_extensions)}")
+        except Exception as e:
+            self._log(f"⚠️  Could not determine file types, proceeding without prioritization. Error: {e}")
+            prioritized_extensions = []
+
 
         # Step 1: Generate searchable code patterns from the compliance brief
-        self._log("Step 1: Translating guidelines into searchable code patterns...")
+        self._log("\nStep 1: Translating guidelines into searchable code patterns...")
         try:
             pattern_generation_prompt = f"""
 You are a senior software architect specializing in code compliance. Analyze the following compliance guidelines and for each one, generate a list of concrete, problematic code patterns that would indicate a potential violation. These patterns should be searchable within a codebase.
@@ -440,47 +471,38 @@ Example format:
             return self._run_code_auditor(repo_url, brief, mode="audit")
 
         # Step 2: Find relevant files for each pattern using targeted RAG searches
-        self._log("\nStep 2: Discovering relevant files with targeted RAG searches...")
-        relevant_files = set()
+        self._log("\nStep 2: Discovering relevant files (Pass 1)...")
+        initial_relevant_files = set()
         from Github_scanner.code_tool import ComplianceChecker
-        # Use a fast and cheap model for this discovery phase
         checker = ComplianceChecker(model_name="gemini-2.5-flash")
         try:
-            # Clone and index the repo once
-            clone_result = checker._clone_and_index(repo_url)
+            clone_result = checker._clone_and_index(repo_url, prioritized_extensions=prioritized_extensions)
             if clone_result['status'] == 'error':
                 self._log(f"⚠️  Failed to clone or index repository: {clone_result['error']}")
-                return self._run_code_auditor(repo_url, brief, mode="audit") # Fallback
+                return self._run_code_auditor(repo_url, brief, mode="audit")
 
             for guideline, patterns in guideline_patterns.items():
                 self._log(f"  - Searching for patterns related to: '{guideline}'")
-                # Check all patterns for the current guideline in one go
                 compliance_result = checker.check_patterns(patterns)
-                
-                # Aggregate file paths from the evidence sources
                 for check in compliance_result.get('compliance_checks', []):
                     for source in check.get('evidence_sources', []):
                         if isinstance(source, str):
-                            relevant_files.add(source)
+                            initial_relevant_files.add(source)
         finally:
-            checker.cleanup()
+            # We keep the checker alive for the second pass, cleanup happens at the end
+            pass
         
-        if not relevant_files:
+        if not initial_relevant_files:
+            checker.cleanup() # Cleanup now if we're exiting early
             return {
-                "summary": "Intelligent Hybrid Audit Complete: No files matching the generated code patterns were found. The codebase appears to be compliant based on this initial scan.",
-                "details": {
-                    "mode": "hybrid_intelligent",
-                    "repository": repo_url,
-                    "stage_1_patterns": guideline_patterns,
-                    "stage_2_results": "Not run, no relevant files found."
-                }
+                "summary": "Intelligent Hybrid Audit Complete: No files matching the initial code patterns were found.",
+                "details": {"mode": "hybrid_intelligent_v2", "repository": repo_url}
             }
 
-        self._log(f"\n✓ Discovery complete. Found {len(relevant_files)} potentially relevant files.")
-        self._log(f"Files to be audited in detail: {', '.join(list(relevant_files)[:5])}...")
+        self._log(f"\n✓ Pass 1 Discovery complete. Found {len(initial_relevant_files)} files.")
 
-        # Step 3: Run a deep, line-by-line audit on the aggregated files
-        self._log("\nStep 3: Running precise line-by-line audit on relevant files...")
+        # Step 3: Run a deep, line-by-line audit on the first set of files
+        self._log("\nStep 3: Running deep scan (Pass 1)...")
         CodeAuditor = get_code_tool()
         auditor = CodeAuditor(model_name="gemini-2.5-flash")
         
@@ -489,55 +511,119 @@ Example format:
         import git
         from pathlib import Path
 
-        temp_dir = tempfile.mkdtemp(prefix='guardian_hybrid_')
-        try:
-            self._log(f"Cloning repository for deep scan: {repo_url}")
-            git.Repo.clone_from(repo_url, temp_dir)
-            repo_path = Path(temp_dir)
+        temp_dir = checker.temp_dir # Use the same temp dir from the checker
+        repo_path = Path(temp_dir)
+        
+        files_to_scan_abs_pass1 = [str(repo_path / file) for file in initial_relevant_files if (repo_path / file).exists()]
+        
+        initial_audit_result = {"violations": []}
+        if files_to_scan_abs_pass1:
+            initial_audit_result = auditor.scan_files(files_to_scan_abs_pass1, brief)
+        
+        initial_violations = initial_audit_result.get('violations', [])
+        self._log(f"✓ Pass 1 Scan complete. Found {len(initial_violations)} violations.")
+
+        # --- Strategy 2: Iterative Pattern Refinement ---
+        all_violations = initial_violations
+        newly_discovered_files = set()
+
+        if initial_violations:
+            # Step 4: Analyze initial violations to generate new patterns
+            self._log("\nStep 4: Analyzing violations to refine search patterns (Strategy 2)...")
+            try:
+                refinement_prompt = f"""
+You are a code compliance expert. Based on the following list of violations that were just found, generate a new, more specific set of searchable code patterns to find similar but potentially missed issues.
+
+Found Violations:
+---
+{json.dumps(initial_violations[:15], indent=2)}
+---
+
+Respond ONLY with a JSON object containing a single key "refined_patterns" with a list of new, specific, and searchable pattern descriptions.
+
+Example:
+{{
+  "refined_patterns": [
+    "Hardcoded color hex codes (e.g., #FFFFFF, #000) in CSS or inline styles",
+    "Use of `setTimeout` with a hardcoded numerical delay",
+    "Hardcoded file download names like 'animation.webm'"
+  ]
+}}
+"""
+                response = self.llm.invoke([HumanMessage(content=refinement_prompt)])
+                response_content = response.content.strip()
+                if '```json' in response_content:
+                    response_content = response_content.split('```json')[1].split('```')[0].strip()
+                
+                refined_patterns_data = json.loads(response_content)
+                refined_patterns = refined_patterns_data.get("refined_patterns", [])
+                self._log(f"✓ Generated {len(refined_patterns)} new patterns for second pass.")
+
+                # Step 5: Run a second RAG search with the refined patterns
+                if refined_patterns:
+                    self._log("\nStep 5: Discovering relevant files with refined patterns (Pass 2)...")
+                    compliance_result_pass2 = checker.check_patterns(refined_patterns)
+                    
+                    second_pass_files = set()
+                    for check in compliance_result_pass2.get('compliance_checks', []):
+                        for source in check.get('evidence_sources', []):
+                            if isinstance(source, str):
+                                second_pass_files.add(source)
+                    
+                    # Filter out files we've already scanned
+                    newly_discovered_files = second_pass_files - initial_relevant_files
+                    self._log(f"✓ Pass 2 Discovery complete. Found {len(newly_discovered_files)} new files.")
+
+            except Exception as e:
+                self._log(f"⚠️  Could not refine patterns for second pass. Error: {e}")
+
+        # Step 6: Perform a final deep scan on newly discovered files
+        if newly_discovered_files:
+            self._log("\nStep 6: Running deep scan on newly discovered files (Pass 2)...")
+            files_to_scan_abs_pass2 = [str(repo_path / file) for file in newly_discovered_files if (repo_path / file).exists()]
             
-            files_to_scan_abs = [str(repo_path / file) for file in relevant_files if (repo_path / file).exists()]
+            if files_to_scan_abs_pass2:
+                second_audit_result = auditor.scan_files(files_to_scan_abs_pass2, brief)
+                second_violations = second_audit_result.get('violations', [])
+                self._log(f"✓ Pass 2 Scan complete. Found {len(second_violations)} new violations.")
+                all_violations.extend(second_violations)
+        
+        # Final cleanup
+        checker.cleanup()
 
-            if not files_to_scan_abs:
-                self._log("Warning: All relevant files found in RAG search did not exist in the cloned repo.")
-                return {
-                    "summary": "Intelligent Hybrid Audit Warning: The files identified in the initial scan could not be found in the repository clone. The audit could not be completed.",
-                    "details": {"mode": "hybrid_intelligent", "files_to_scan": list(relevant_files)}
-                }
+        # Step 7: Aggregate and return all results
+        summary = f"Enhanced Hybrid Audit Results:\n"
+        summary += f"- Repository: {repo_url}\n"
+        summary += f"- Pass 1 (Pattern-based): Found {len(initial_relevant_files)} files, resulting in {len(initial_violations)} violations.\n"
+        if newly_discovered_files:
+            summary += f"- Pass 2 (Refinement-based): Found {len(newly_discovered_files)} new files, adding {len(all_violations) - len(initial_violations)} more violations.\n"
+        summary += f"- Total violations found: {len(all_violations)}\n\n"
 
-            audit_result = auditor.scan_files(files_to_scan_abs, brief)
-            
-            # Step 4: Synthesize and return the final results
-            violations = audit_result.get('violations', [])
-            summary = f"Intelligent Hybrid Audit Results:\n"
-            summary += f"- Repository: {repo_url}\n"
-            summary += f"- Initial pattern-based scan identified {len(relevant_files)} potentially relevant files.\n"
-            summary += f"- Detailed line-by-line scan of these files found {len(violations)} violations.\n\n"
+        if all_violations:
+            summary += "Top violations found:\n"
+            for i, v in enumerate(all_violations[:10], 1):
+                relative_path = v.get('file', '').replace(str(repo_path), '').lstrip('/\\')
+                summary += f"{i}. {relative_path} (line {v.get('line')})\n"
+                summary += f"   {v.get('explanation')}\n\n"
+        else:
+            summary += "✅ No violations found in the detailed scan of the relevant files!\n"
 
-            if violations:
-                summary += "Top violations found:\n"
-                for i, v in enumerate(violations[:10], 1):
-                    # Ensure file path is relative for cleaner output
-                    relative_path = v.get('file', '').replace(str(repo_path), '')
-                    summary += f"{i}. {relative_path} (line {v.get('line')})\n"
-                    summary += f"   {v.get('explanation')}\n\n"
-            else:
-                summary += "✅ No violations found in the detailed scan of the relevant files!\n"
-
-            return {
-                "summary": summary,
-                "details": {
-                    "mode": "hybrid_intelligent",
-                    "repository": repo_url,
-                    "total_violations": len(violations),
-                    "violations": violations,
-                    "files_scanned_in_detail": list(relevant_files),
-                    "scan_statistics": audit_result.get('statistics', {})
+        return {
+            "summary": summary,
+            "details": {
+                "mode": "hybrid_intelligent_v2",
+                "repository": repo_url,
+                "total_violations": len(all_violations),
+                "violations": all_violations,
+                "files_scanned_in_detail": list(initial_relevant_files | newly_discovered_files),
+                "scan_statistics": {
+                    "pass1_files": len(initial_relevant_files),
+                    "pass1_violations": len(initial_violations),
+                    "pass2_new_files": len(newly_discovered_files),
+                    "pass2_violations": len(all_violations) - len(initial_violations)
                 }
             }
-
-        finally:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, onerror=lambda func, path, exc: (os.chmod(path, 0o777), func(path)))
+        }
     
     def _run_qa_tool(self, repo_url: str, question: str) -> str:
         """Run QA tool - uses existing session if available for the same repo"""

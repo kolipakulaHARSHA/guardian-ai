@@ -431,7 +431,7 @@ class ComplianceChecker:
         self.repo_path = None
         self.temp_dir = None
 
-    def _clone_and_index(self, repo_url: str) -> Dict[str, Any]:
+    def _clone_and_index(self, repo_url: str, prioritized_extensions: List[str] = None) -> Dict[str, Any]:
         """Clones and indexes a repository. This is called once per session."""
         if self.repo_path:
             return {'status': 'success', 'message': 'Repository already indexed.'}
@@ -443,7 +443,7 @@ class ComplianceChecker:
             print(f"✓ Repository cloned successfully\n")
             self.repo_path = Path(self.temp_dir)
             
-            index_result = self.index_repository(self.repo_path)
+            index_result = self.index_repository(self.repo_path, prioritized_extensions)
             
             if index_result['status'] != 'success':
                 return {
@@ -475,42 +475,52 @@ class ComplianceChecker:
         self.qa_chain = None
         self.documents = []
     
-    def index_repository(self, repo_path: Path) -> Dict[str, Any]:
+    def index_repository(self, repo_path: Path, prioritized_extensions: List[str] = None) -> Dict[str, Any]:
         """
         Index repository files for semantic search.
         
         Args:
             repo_path: Path to cloned repository
+            prioritized_extensions: List of file extensions to boost during retrieval.
             
         Returns:
             Indexing statistics
         """
         # File extensions to index
-        extensions = [
+        default_extensions = [
             '.py', '.js', '.ts', '.jsx', '.tsx',
             '.java', '.cpp', '.c', '.h', '.cs',
             '.md', '.txt', '.rst',
-            '.json', '.yaml', '.yml', '.toml'
+            '.json', '.yaml', '.yml', '.toml', '.html', '.css'
         ]
         
+        extensions_to_index = set(default_extensions)
+        if prioritized_extensions:
+            extensions_to_index.update(prioritized_extensions)
+
         print("Loading documents from repository...")
         self.documents = []
         
         # Load all relevant files
-        for ext in extensions:
+        for ext in extensions_to_index:
             for file_path in repo_path.rglob(f'*{ext}'):
                 if self._should_index_file(file_path):
                     try:
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
                         
+                        # Add a boost for prioritized file types
+                        metadata = {
+                            'source': str(file_path.relative_to(repo_path)),
+                            'file_name': file_path.name,
+                            'extension': file_path.suffix
+                        }
+                        if prioritized_extensions and file_path.suffix in prioritized_extensions:
+                            metadata['priority_boost'] = "high"
+
                         doc = Document(
                             page_content=content,
-                            metadata={
-                                'source': str(file_path.relative_to(repo_path)),
-                                'file_name': file_path.name,
-                                'extension': file_path.suffix
-                            }
+                            metadata=metadata
                         )
                         self.documents.append(doc)
                     except Exception as e:
@@ -520,7 +530,8 @@ class ComplianceChecker:
             return {
                 'status': 'warning',
                 'message': 'No documents found to index',
-                'documents_count': 0
+                'documents_count': 0,
+                'chunks_count': 0
             }
         
         print(f"Loaded {len(self.documents)} documents")
@@ -540,11 +551,17 @@ class ComplianceChecker:
         print("Creating vector store (this may take a moment)...")
         self.vectorstore = FAISS.from_documents(splits, self.embeddings)
         
-        # Create retriever
-        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 5})
+        # Create retriever with priority boosting if applicable
+        search_kwargs = {"k": 5}
+        if prioritized_extensions:
+            # FAISS doesn't directly support metadata boosting in the same way as some other vector stores.
+            # A common workaround is to retrieve more results and then re-rank them in memory.
+            search_kwargs["k"] = 10 # Retrieve more to allow for re-ranking
+            
+        self.retriever = self.vectorstore.as_retriever(search_kwargs=search_kwargs)
         
         # Create QA chain
-        template = """Answer the question based only on the following context:
+        template = """Answer the question based only on the following context. Prioritize context from files with 'priority_boost: high' if available.
 
 {context}
 
