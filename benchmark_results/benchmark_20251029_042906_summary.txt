@@ -1,0 +1,20 @@
+======================================================================
+GUARDIAN AI BENCHMARK SUMMARY
+======================================================================
+
+Timestamp: 20251029_042906
+Total Tests: 1
+
+
+======================================================================
+Test: Hybrid Audit - 3DTinKer Repository
+======================================================================
+
+Query: Run an audit on https://github.com/Aadisheshudupa/3DTinKer to find all potential issues on basis of E:\Hackathon\GuardianAIV1\GuardianAI\Application_Development_Re-Engineering_Guidelines_0.pdf.
+
+LangChain Agent:
+  Success: 0/3
+
+Simple Agent:
+  Success: 0/3
+

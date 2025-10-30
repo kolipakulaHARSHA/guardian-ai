@@ -7,8 +7,34 @@ import os
 import sys
 import json
 import re
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
+
+# ============================================================================
+# CRITICAL: Suppress warnings for cleaner output
+# ============================================================================
+# Suppress LangChain deprecation warnings
+warnings.filterwarnings("ignore", message=".*Convert_system_message_to_human.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="langchain_google_genai")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ============================================================================
+# CRITICAL: Enable real-time output (disable buffering)
+# ============================================================================
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+# Fix Unicode encoding for Windows console with line buffering
+if sys.platform == 'win32':
+    import codecs
+    # Reconfigure for line buffering (real-time output)
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+        sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
+    else:
+        # Fallback for older Python versions
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 # Add module paths
 GUARDIAN_ROOT = Path(__file__).parent
@@ -69,7 +95,8 @@ class GuardianAgentSimple:
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=0.3,
-            google_api_key=os.environ['GOOGLE_API_KEY']
+            google_api_key=os.environ['GOOGLE_API_KEY'],
+            convert_system_message_to_human=True  # Suppress deprecation warning
         )
         self.conversation_history = []
         # Persistent QA tool for interactive mode
