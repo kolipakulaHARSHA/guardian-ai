@@ -49,6 +49,9 @@ Thumbs.db
 temp/
 tmp/
 
+# Documentation (exclude markdown files)
+*.md
+
 # Database
 *.sqlite3
 *.db
