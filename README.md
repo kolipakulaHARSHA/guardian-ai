@@ -1,4 +1,4 @@
-# 🛡️ Guardian AI
+#Guardian AI
 
 > **AI-Powered Code Compliance & Repository Analysis Platform**
 
@@ -12,31 +12,31 @@ Guardian AI is an intelligent, autonomous system that uses advanced AI agents to
 
 ---
 
-## 🎯 Key Features
+## Key Features
 
-### 🤖 Intelligent AI Agent Orchestration
+### Intelligent AI Agent Orchestration
 - **Autonomous Decision Making** - AI agent automatically selects and combines tools based on user requests
 - **LangGraph ReAct Pattern** - Advanced reasoning and action loop for intelligent task execution
 - **Multi-Tool Integration** - Seamlessly orchestrates legal analysis, code auditing, and Q&A capabilities
 
-### 📄 Legal Document Analysis (RAG)
+### Legal Document Analysis (RAG)
 - **PDF Processing** - Extract compliance rules from regulatory documents (ISO-27001, GDPR, PCI-DSS, etc.)
 - **ChromaDB Vector Store** - Persistent knowledge base with semantic search
 - **Technical Brief Generation** - Convert legal documents into developer-friendly compliance checklists
 
-### 🔍 Code Compliance Auditing
+### Code Compliance Auditing
 - **Line-by-Line Scanning** - Exhaustive analysis of entire repositories (20-40 line chunks)
 - **Multi-Language Support** - Python, JavaScript, Java, C++, Go, and 10+ more languages
 - **Structured Violation Reports** - Detailed JSON output with file paths, line numbers, and recommendations
 - **Real-Time Progress** - Server-Sent Events (SSE) for live scanning updates
 
-### 💬 Repository Q&A System
+### Repository Q&A System
 - **Interactive Chat** - Ask questions about any GitHub repository in natural language
 - **RAG-Powered** - FAISS vector store for fast semantic search across codebases
 - **Streaming Responses** - Real-time answer generation with progress indicators
 - **Multi-Query Support** - Answer multiple questions in a single session
 
-### 🎨 Modern Web Interface
+### Modern Web Interface
 - **React + TypeScript** - Type-safe, component-based architecture
 - **Dark/Light Mode** - Automatic theme switching with system preference support
 - **Responsive Design** - Seamless experience across desktop, tablet, and mobile
@@ -45,7 +45,7 @@ Guardian AI is an intelligent, autonomous system that uses advanced AI agents to
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -84,7 +84,7 @@ Guardian AI is an intelligent, autonomous system that uses advanced AI agents to
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -148,7 +148,7 @@ Open your browser to `http://localhost:5173` and start using Guardian AI!
 
 ---
 
-## 📦 Technology Stack
+##  Technology Stack
 
 ### Backend
 - **FastAPI** - Modern, high-performance web framework
@@ -198,7 +198,7 @@ Open your browser to `http://localhost:5173` and start using Guardian AI!
 
 ---
 
-## 🎯 Usage
+##  Usage
 
 ### 1. Code Compliance Audit
 
@@ -423,7 +423,7 @@ guardian-ai/
 
 ---
 
-## 🎨 Features in Detail
+##  Features in Detail
 
 ### Real-Time Progress Tracking
 - Server-Sent Events (SSE) stream updates during code scanning
@@ -454,7 +454,7 @@ Supports analysis of: Python, JavaScript, TypeScript, Java, C++, C, Go, Ruby, PH
 
 ---
 
-## 🧪 Testing
+##  Testing
 
 ### Backend Tests
 ```bash
@@ -486,7 +486,7 @@ npm run preview
 
 ---
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### Common Issues
 
@@ -526,7 +526,7 @@ For more troubleshooting, see [TROUBLESHOOTING.md](Backend/docs/TROUBLESHOOTING.
 
 ---
 
-## 🚀 Deployment
+##  Deployment
 
 ### Backend (Production)
 
@@ -568,7 +568,7 @@ CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 We welcome contributions! Here's how you can help:
 
@@ -586,13 +586,13 @@ We welcome contributions! Here's how you can help:
 
 ---
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **Google Gemini AI** - Advanced language models
 - **LangChain** - LLM application framework
@@ -604,7 +604,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📧 Support
+##  Support
 
 - **Documentation:** Check the [docs](Backend/docs/) folder
 - **Issues:** Open an issue on GitHub
@@ -612,7 +612,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🎯 Use Cases
+##  Use Cases
 
 ### 1. Security Audits
 Scan repositories for security vulnerabilities against industry standards (OWASP, CWE)
@@ -634,7 +634,7 @@ Understand unfamiliar or legacy codebases quickly
 
 ---
 
-## 🔮 Roadmap
+##  Roadmap
 
 - [ ] Support for more AI models (OpenAI, Anthropic)
 - [ ] Custom compliance rule creation
