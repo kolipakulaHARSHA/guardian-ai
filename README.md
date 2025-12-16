@@ -175,26 +175,6 @@ Open your browser to `http://localhost:5173` and start using Guardian AI!
 
 ---
 
-## 📚 Documentation
-
-### Core Documentation
-- **[Installation Guide](INSTALLATION_GUIDE.md)** - Detailed setup instructions
-- **[Quick Start Guide](QUICK_START.md)** - Fast track to get running
-- **[Project Documentation](PROJECT_DOCUMENTATION.md)** - Complete system overview
-- **[Setup Status](SETUP_STATUS.md)** - Current configuration status
-
-### Component Documentation
-- **[Backend README](Backend/README.md)** - Backend API details
-- **[Frontend README](Frontend/README.md)** - Frontend architecture
-- **[Code Tool README](Backend/Github_scanner/CODE_TOOL_README.md)** - Code auditor details
-- **[Q&A Tool README](Backend/Github_scanner/docs/QA_TOOL_README.md)** - Repository Q&A system
-- **[Legal Tool README](Backend/Guardian-Legal-analyzer-main/README.md)** - Legal analyzer guide
-
-### Guides
-- **[Agent Orchestration Explained](Backend/docs/AGENT_ORCHESTRATION_EXPLAINED.md)** - How the AI agent works
-- **[Agent Modes Explained](Backend/docs/AGENT_MODES_EXPLAINED.md)** - Different operational modes
-- **[Data Flow Explanation](Backend/docs/DATA_FLOW_EXPLANATION.md)** - System data flow
-- **[Troubleshooting](Backend/docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ---
 
