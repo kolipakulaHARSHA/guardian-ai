@@ -1,4 +1,4 @@
-#Guardian AI
+# Guardian AI
 
 > **AI-Powered Code Compliance & Repository Analysis Platform**
 
